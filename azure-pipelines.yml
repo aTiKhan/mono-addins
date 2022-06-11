@@ -1,48 +1,90 @@
 pool:
-  name: Hosted Mac Internal Mojave
+  vmImage: 'macOS-10.15'
 
 variables:
-- name: BuildPlatform
-  value: Any CPU
 - name: BuildConfiguration
-  value: DebugNoGui
+  value: Debug
+- name: TeamName
+  value: Mono.Addins
 
 steps:
 
-- task: Bash@3
-  displayName: Provision
-  inputs:
-    targetType: 'inline'
-    script: '$(Build.SourcesDirectory)/bot-provisioning/provisionator-bootstrap.sh $(Build.SourcesDirectory)/bot-provisioning/dependencies.csx'
-    workingDirectory: '$(Build.SourcesDirectory)'
+#- task: Bash@3
+#  displayName: Provision
+#  inputs:
+#    targetType: 'inline'
+#    script: '$(Build.SourcesDirectory)/bot-provisioning/provisionator-bootstrap.sh $(Build.SourcesDirectory)/bot-provisioning/dependencies.csx'
+#    workingDirectory: '$(Build.SourcesDirectory)'
 
-- task: NuGetCommand@2
+- task: MicroBuildSigningPlugin@3
+  displayName: 'Install Signing Plugin'
   inputs:
-    command: 'restore'
-    restoreSolution: 'Mono.Addins.sln'
-    feedsToUse: 'select'
+    signType: 'Real'
+    azureSubscription: 'MicroBuild Signing Task (DevDiv)'
+  env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 
-- task: MSBuild@1
+- task: UseDotNet@2
+  displayName: 'Install .NET 3.1'
+  inputs:
+    packageType: 'sdk'
+    version: '3.1.413'
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 6'
+  inputs:
+    packageType: 'sdk'
+    version: '6.0.100'
+
+- task: DotNetCoreCLI@2
   displayName: 'Build solution Mono.Addins.sln'
   inputs:
-    solution: Mono.Addins.sln
-    platform: '$(BuildPlatform)'
-    configuration: '$(BuildConfiguration)'
+    command: build
+    arguments: '/p:Configuration=$(BuildConfiguration)'
 
-- task: MSBuild@1
-  displayName: 'Test Assemblies Test\UnitTests\bin\Debug\UnitTests.dll'
+- task: DotNetCoreCLI@2
+  displayName: 'Generate packages'
   inputs:
-    solution: 'Test/UnitTests/UnitTests.csproj'
-    platform: '$(BuildPlatform)'
-    configuration: '$(BuildConfiguration)'
-    msbuildArguments: '/t:Test'
+    command: custom
+    custom: pack
+    projects: Mono.Addins.sln
+    arguments: '/p:Configuration=$(BuildConfiguration)'
+    nobuild: true
+    workingDirectory: $(Build.SourcesDirectory)
 
-- task: PublishTestResults@2
-  displayName: 'Publish Test Results Test\UnitTests\TestResult.xml'
+#- task: MSBuild@1
+#  displayName: 'Test Assemblies Test\UnitTests\bin\Debug\UnitTests.dll'
+#  inputs:
+#    solution: 'Test/UnitTests/UnitTests.csproj'
+#    platform: '$(BuildPlatform)'
+#    configuration: '$(BuildConfiguration)'
+#    msbuildArguments: '/t:Test'
+#
+#- task: PublishTestResults@2
+#  displayName: 'Publish Test Results Test\UnitTests\TestResult.xml'
+#  inputs:
+#    testResultsFormat: 'NUnit'
+#    testResultsFiles: 'Test/UnitTests/TestResult.xml'
+#    failTaskOnFailedTests: true
+
+- task: Bash@3
+  displayName: 'Generate package file list'
   inputs:
-    testResultsFormat: 'NUnit'
-    testResultsFiles: 'Test/UnitTests/TestResult.xml'
-    failTaskOnFailedTests: true
+    targetType: 'inline'
+    script: |
+      echo "<filelist>" > $(build.sourcesdirectory)/bin/files.xml
+      echo " <certificate certnumbers='401405'>" >> $(build.sourcesdirectory)/bin/files.xml
+      find $(build.sourcesdirectory)/bin -name "*.nupkg" -exec echo "  <file srcpath='{}' dstpath='{}'></file>" \; >> $(build.sourcesdirectory)/bin/files.xml
+      echo " </certificate>" >> $(build.sourcesdirectory)/bin/files.xml
+      echo "</filelist>" >> $(build.sourcesdirectory)/bin/files.xml
+    workingDirectory: '$(build.sourcesdirectory)/bin'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Sign packages'
+  inputs:
+    command: 'custom'
+    custom: '$(MBSIGN_APPFOLDER)/ddsignfiles.dll'
+    arguments: '/filelist:$(build.sourcesdirectory)/bin/files.xml'
 
 - task: CopyFiles@1
   displayName: 'Copy Files to: $(build.artifactstagingdirectory)'
